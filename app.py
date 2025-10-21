@@ -8,17 +8,22 @@ from src.transcriber import transcribe
 from src.suggester import get_suggestion
 from src.summarizer import generate_summary
 
-# Initialize session state
+# Global state
+transcript_list = []
+latest_text = ""
+latest_suggestion = ""
+audio_queue = queue.Queue()
+running_flag = False  # Thread-safe flag for background loop
+
+# Initialize session state safely
+if "running" not in st.session_state:
+    st.session_state.running = False
 if "latest_text" not in st.session_state:
     st.session_state.latest_text = ""
 if "latest_suggestion" not in st.session_state:
     st.session_state.latest_suggestion = ""
 if "transcript_list" not in st.session_state:
     st.session_state.transcript_list = []
-
-# Global state
-running = False
-audio_queue = queue.Queue()
 
 # Streamlit UI
 st.set_page_config(page_title="MeetingAI", layout="wide")
@@ -37,47 +42,62 @@ def audio_callback(indata, frames, time_info, status):
 
 # Background thread
 def meeting_loop():
-    global running
+    global running_flag, latest_text, latest_suggestion
+    devices = sd.query_devices()
+    mic_id = None
+    for i, dev in enumerate(devices):
+        if "baseus" in dev["name"].lower() and dev["max_input_channels"] > 0:
+            mic_id = i
+            break
 
-    LOOPBACK_DEVICE_ID = 20  # Stereo Mix (Realtek HD Audio Stereo input)
+    if mic_id is None:
+        print("❌ Headset mic not found.")
+        return
 
     try:
-        with sd.InputStream(samplerate=16000, channels=2, device=LOOPBACK_DEVICE_ID, callback=audio_callback):
-            while running:
+        with sd.InputStream(samplerate=16000, channels=1, device=mic_id, callback=audio_callback, blocksize=32000):
+            while running_flag:
                 if not audio_queue.empty():
                     audio_chunk = audio_queue.get()
-                    audio_np = np.mean(audio_chunk, axis=1)  # Convert stereo to mono
+                    audio_np = np.squeeze(audio_chunk).astype(np.float32)
 
                     if audio_np is not None and len(audio_np) > 1000:
                         try:
                             text = transcribe(audio_np)
                             if text:
-                                st.session_state.transcript_list.append(text)
-                                st.session_state.latest_text = text
-                                st.session_state.latest_suggestion = get_suggestion(text)
+                                transcript_list.append(text)
+                                latest_text = text
+                                print("main Block:", text)
+                                latest_suggestion = get_suggestion(text)
                         except Exception as e:
                             print("Transcription error:", e)
                     else:
                         print("Skipped empty or short audio chunk.")
-                time.sleep(1)
+                time.sleep(0.5)
     except Exception as e:
-        st.error(f"❌ Failed to start loopback stream: {e}")
+        print(f"❌ Failed to start mic stream: {e}")
 
 # Start meeting
-if start_btn and not running:
-    running = True
+if start_btn and not st.session_state.running:
+    st.session_state.running = True
+    running_flag = True
     threading.Thread(target=meeting_loop, daemon=True).start()
     st.success("Meeting started. Listening...")
 
 # Stop meeting
-if stop_btn and running:
-    running = False
+if stop_btn and st.session_state.running:
+    st.session_state.running = False
+    running_flag = False
     st.warning("Meeting stopped.")
+    st.session_state.transcript_list = transcript_list
     summary = generate_summary(st.session_state.transcript_list)
     summary_box.success("📝 Summary:\n\n" + summary)
 
-# UI polling
-if running:
+# UI update block
+if st.session_state.running:
+    st.session_state.latest_text = latest_text
+    st.session_state.latest_suggestion = latest_suggestion
+
     caption_box.markdown(
         f"""
         <div style='background-color:#f0f0f0; padding:10px; border-radius:8px; font-size:24px; font-weight:bold; color:#333; text-align:center;'>
@@ -86,5 +106,6 @@ if running:
         """,
         unsafe_allow_html=True
     )
+
     if st.session_state.latest_suggestion:
         suggestion_box.markdown(f"**🤖 Gemini Suggestion:**\n\n{st.session_state.latest_suggestion}")
