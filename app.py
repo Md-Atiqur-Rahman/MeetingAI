@@ -241,3 +241,5 @@ else:
 st.markdown("---")
 st.caption("💡 Tip: Make sure Teams audio is playing through your speakers")
 st.caption("🔊 Audio amplification is active - works with low volume too!")
+# st.caption("Developed by OpenAI ChatGPT")
+st.caption("© 2024 MeetingAI")
