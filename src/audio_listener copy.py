@@ -14,23 +14,14 @@ def find_loopback_device():
     """Find the appropriate audio input device for system audio capture"""
     devices = sd.query_devices()
     
-    # Priority: VB-Cable first, then Stereo Mix
-    search_terms = [
-        "cable output",  # VB-Cable
-        "vb-audio",
-        "virtual cable",
-        "stereo mix",
-        "loopback", 
-        "what u hear",
-        "wave out mix"
-    ]
+    search_terms = ["stereo mix", "loopback", "what u hear", "wave out mix"]
     
     print("\n🔍 Searching for audio capture device...")
     
     for term in search_terms:
         for i, device in enumerate(devices):
             if term in device['name'].lower() and device['max_input_channels'] > 0:
-                print(f"✅ Found: {device['name']}")
+                print(f"✅ Found loopback device: {device['name']}")
                 return i
     
     print("⚠️ No loopback device found. Using default input.")
