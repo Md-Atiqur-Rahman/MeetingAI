@@ -1,0 +1,7 @@
+streamlit
+openai-whisper
+sounddevice
+numpy
+torch
+google-generativeai
+soundcard numpy
