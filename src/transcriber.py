@@ -34,6 +34,7 @@ def transcribe(audio_np):
         
         # Decode audio with better options
         options = whisper.DecodingOptions(
+            #language="bn",  # Bengali
             language="en",  # Force English
             fp16=torch.cuda.is_available(),
             without_timestamps=True,

@@ -104,13 +104,11 @@ if "running" not in st.session_state:
     st.session_state.running = False
 if "last_timestamp" not in st.session_state:
     st.session_state.last_timestamp = 0
-if "auto_refresh_count" not in st.session_state:
-    st.session_state.auto_refresh_count = 0
 
 # Streamlit UI
 st.set_page_config(page_title="MeetingAI", layout="wide")
 
-# Custom CSS for smoother updates
+# Custom CSS
 st.markdown("""
 <style>
     .stButton button {
@@ -146,7 +144,6 @@ if start_btn:
     if not st.session_state.running:
         st.session_state.running = True
         st.session_state.last_timestamp = 0
-        st.session_state.auto_refresh_count = 0
         
         save_transcripts({"transcripts": [], "latest_text": "", "latest_suggestion": "", "timestamp": time.time()})
         
@@ -155,7 +152,7 @@ if start_btn:
             thread_instance[0] = threading.Thread(target=meeting_loop, daemon=True)
             thread_instance[0].start()
             
-        st.success("✅ Started!")
+        st.success("✅ Meeting started!")
         time.sleep(0.5)
         st.rerun()
 
@@ -165,20 +162,25 @@ if stop_btn:
         st.session_state.running = False
         running_flag.clear()
         
+        st.warning("⏹️ Meeting stopped. Generating summary...")
+        
         data = load_transcripts()
         transcripts = data.get("transcripts", [])
         
         if len(transcripts) > 0:
             summary = generate_summary(transcripts)
-            summary_box.success(f"📝 **Summary:**\n\n{summary}")
+            summary_box.success(f"📝 **Meeting Summary:**\n\n{summary}")
         else:
-            summary_box.info("No transcript")
+            summary_box.info("No transcript available to summarize.")
         
-        time.sleep(0.5)
-        st.rerun()
+        # Don't rerun - let user read the summary
+        st.info("👆 Summary generated! You can now start a new meeting.")
 
 # Main UI
 if st.session_state.running:
+    
+    # AUTO-REFRESH: This runs every 2 seconds
+    count = st_autorefresh(interval=2000, key="datarefresh")
     
     # Load data
     data = load_transcripts()
@@ -186,16 +188,9 @@ if st.session_state.running:
     current_suggestion = data.get("latest_suggestion", "")
     all_transcripts = data.get("transcripts", [])
     transcript_count = len(all_transcripts)
-    file_timestamp = data.get("timestamp", 0)
-    
-    # Check for updates
-    new_content = False
-    if file_timestamp > st.session_state.last_timestamp:
-        st.session_state.last_timestamp = file_timestamp
-        new_content = True
     
     # Status bar
-    st.markdown(f'<p class="live-indicator">🔴 LIVE</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="live-indicator">🔴 LIVE (Auto-refresh: {count})</p>', unsafe_allow_html=True)
     st.caption(f"📊 Segments: {transcript_count}")
     
     # Latest caption
@@ -261,18 +256,20 @@ if st.session_state.running:
     
 else:
     caption_box.info("👆 Click **'▶️ Start Meeting'**")
-    st.info("""
-    **Setup:**
-    1. VB-Cable configured ✅
-    2. Audio playing through CABLE Input ✅
-    3. Click Start Meeting
-    4. **Captions will appear automatically!**
-    """)
+    
+    with st.expander("ℹ️ How to Use", expanded=False):
+        st.markdown("""
+        **Setup:**
+        1. ✅ VB-Cable configured
+        2. ✅ Audio playing through CABLE Input
+        3. ✅ Click Start Meeting
+        4. ✅ Captions appear automatically every 2 seconds!
+        
+        **For Teams meetings:**
+        - Set Teams audio output to CABLE Input
+        - Keep this app open during the meeting
+        - Click Stop Meeting when done to get full summary
+        """)
 
 st.markdown("---")
-st.caption("🎙️ MeetingAI • Real-time transcription")
-
-# Auto-refresh mechanism - place at the very end
-if st.session_state.running:
-    time.sleep(2)  # Wait 2 seconds
-    st.rerun()  # Then refresh automatically
+st.caption("🎙️ MeetingAI • Real-time transcription with Whisper AI")
