@@ -36,11 +36,11 @@ def find_loopback_device():
     print("⚠️ No loopback device found. Using default input.")
     return None
 
-def start_listening(samplerate=16000, blocksize=1600):
-    """Captures system audio with automatic volume amplification"""
+def start_listening(samplerate=16000, blocksize=800):  # Smaller blocks = lower latency
+    """Captures system audio with low latency"""
     
     def record_loop():
-        """Main recording loop with auto-amplification"""
+        """Main recording loop with optimized settings"""
         
         try:
             device_id = find_loopback_device()
@@ -51,63 +51,54 @@ def start_listening(samplerate=16000, blocksize=1600):
                 print(f"📢 Using default input: {devices[device_id]['name']}")
             
             def audio_callback(indata, frames, time_info, status):
-                """Process each audio block with amplification"""
+                """Process each audio block with minimal latency"""
                 if status:
                     print(f"⚠️ Audio status: {status}")
                 
-                # Copy and convert to float32
                 audio_data = indata.copy().astype(np.float32)
                 
                 # Calculate current amplitude
                 max_amplitude = np.max(np.abs(audio_data))
                 
-                # AUTO AMPLIFICATION
-                if max_amplitude > 0.00001:  # Not complete silence
-                    # Target amplitude: 0.1 (10% of max range)
+                # AUTO AMPLIFICATION (optimized)
+                if max_amplitude > 0.00001:
                     target_amplitude = 0.1
-                    amplification_factor = target_amplitude / max_amplitude
-                    
-                    # Limit amplification to prevent extreme noise
-                    amplification_factor = min(amplification_factor, 100.0)
-                    
-                    # Apply amplification
+                    amplification_factor = min(target_amplitude / max_amplitude, 50.0)
                     audio_data = audio_data * amplification_factor
-                    
-                    # Clip to prevent distortion
                     audio_data = np.clip(audio_data, -1.0, 1.0)
                 
-                # Add to queue
+                # Add to queue (non-blocking)
                 if not combined_queue.full():
                     combined_queue.put(audio_data)
                 else:
                     try:
                         combined_queue.get_nowait()
+                        combined_queue.put(audio_data)
                     except queue.Empty:
                         pass
-                    combined_queue.put(audio_data)
             
-            print(f"🎙️ Starting audio stream with AUTO-AMPLIFICATION")
-            print(f"📊 Device ID: {device_id}")
+            print(f"🎙️ Starting LOW LATENCY audio stream")
+            print(f"📊 Device ID: {device_id}, Block size: {blocksize}")
             
             with sd.InputStream(
                 samplerate=samplerate,
                 channels=1,
                 device=device_id,
                 callback=audio_callback,
-                blocksize=blocksize,
-                dtype='float32'
+                blocksize=blocksize,  # Smaller = lower latency
+                dtype='float32',
+                latency='low'  # Request low latency mode
             ):
-                print("✅ Audio stream started - Auto-amplification ACTIVE")
+                print("✅ Audio stream started - LOW LATENCY mode")
                 
                 while True:
-                    time.sleep(0.1)
+                    time.sleep(0.01)  # Very fast polling
                     
         except Exception as e:
             print(f"❌ Audio stream error: {e}")
             print("\n🔧 Solutions:")
-            print("1. Enable 'Stereo Mix' in Windows Sound settings")
-            print("2. Set Stereo Mix volume to 100%")
-            print("3. Or install VB-Cable virtual audio device")
+            print("1. Enable 'Stereo Mix' or use VB-Cable")
+            print("2. Check audio device permissions")
     
     return record_loop
 
