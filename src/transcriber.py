@@ -8,46 +8,31 @@ print("📥 Loading faster-whisper model...")
 print(f"🎮 CUDA available: {torch.cuda.is_available()}")
 
 # Auto-detect best device
-# try:
-#     # Try GPU first
-#     if torch.cuda.is_available():
-#         print(f"🎮 Attempting GPU: {torch.cuda.get_device_name(0)}")
-#         model = WhisperModel(
-#             "base",
-#             device="cuda",
-#             compute_type="float16",
-#             device_index=0,
-#             num_workers=4
-#         )
-#         print("✅ Faster-whisper loaded on GPU")
-#     else:
-#         raise Exception("CUDA not available")
-        
-# except Exception as e:
-#     print(f"⚠️ GPU load failed: {e}")
-#     print("📥 Loading on CPU instead (still 3-5x faster than openai-whisper)...")
-    
-#     # Fallback to CPU with optimization
-#     model = WhisperModel(
-#         "base",
-#         device="cpu",
-#         compute_type="int8",  # CPU optimized
-#         cpu_threads=4,  # Use 4 threads
-#         num_workers=4
-#     )
-#     print("✅ Faster-whisper loaded on CPU (optimized)")
-# print(f"⚠️ GPU load failed: {e}")
-print("📥 Loading on CPU instead (still 3-5x faster than openai-whisper)...")
 
-# Fallback to CPU with optimization
-model = WhisperModel(
-    "tiny",# "tiny" = fastest, "small" = balanced, "base" = good quality
-    device="cpu",
-    compute_type="int8",  # CPU optimized
-    cpu_threads=4,  # Use 4 threads
-    num_workers=4
-)
-print("✅ Faster-whisper loaded on CPU (optimized)")
+# Try GPU first
+if torch.cuda.is_available():
+    print(f"🎮 Attempting GPU: {torch.cuda.get_device_name(0)}")
+    model = WhisperModel(
+        "tiny",
+        device="cuda",
+        compute_type="float16",
+        device_index=0,
+        num_workers=4
+    )
+    print("✅ Faster-whisper loaded on GPU")
+else:
+    raise Exception("CUDA not available")
+        
+
+# # Fallback to CPU with optimization
+# model = WhisperModel(
+#     "tiny",# "tiny" = fastest, "small" = balanced, "base" = good quality
+#     device="cpu",
+#     compute_type="int8",  # CPU optimized
+#     cpu_threads=4,  # Use 4 threads
+#     num_workers=4
+# )
+# print("✅ Faster-whisper loaded on CPU (optimized)")
 
 def transcribe(audio_np):
     """
