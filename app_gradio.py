@@ -21,7 +21,6 @@ except ImportError as e:
     print(f"❌ Import error: {e}")
     print("⚠️ Running without speaker identification")
     
-    # Fallback: no speaker identification
     def identify_speaker(audio, samplerate=16000):
         return "Person-1"
     
@@ -38,7 +37,54 @@ latest_english = ["Waiting for speech..."]
 latest_bangla = ["বক্তৃতার জন্য অপেক্ষা করছি..."]
 all_transcripts = []
 transcript_counter = [0]
-current_segment = {"speaker": None, "text": "", "text_bn": ""}  # Accumulating current segment
+current_segment = {
+    "speaker": None, 
+    "text": "", 
+    "text_bn_temp": "",      # Phase 1: Word-by-word (temporary)
+    "text_bn_final": "",     # Phase 2: Context-aware (saved)
+    "is_translating": False  # Flag to show translation in progress
+}
+
+def word_by_word_translate(text):
+    """
+    Phase 1: Quick word-by-word translation (NOT SAVED)
+    This is just for instant visual feedback
+    """
+    # Simple word mapping for common words (extend as needed)
+    word_map = {
+        "hello": "হ্যালো", "hi": "হাই", "good": "ভালো", "morning": "সকাল",
+        "afternoon": "বিকাল", "evening": "সন্ধ্যা", "night": "রাত",
+        "thank": "ধন্যবাদ", "you": "আপনি", "yes": "হ্যাঁ", "no": "না",
+        "please": "দয়া করে", "can": "পারেন", "the": "", "is": "হয়",
+        "are": "আছে", "what": "কি", "how": "কিভাবে", "when": "কখন",
+        "where": "কোথায়", "who": "কে", "why": "কেন", "meeting": "মিটিং",
+        "discussion": "আলোচনা", "project": "প্রকল্প", "team": "দল",
+        "work": "কাজ", "today": "আজ", "tomorrow": "আগামীকাল",
+        "report": "রিপোর্ট", "update": "আপডেট", "question": "প্রশ্ন",
+        "answer": "উত্তর", "time": "সময়", "break": "বিরতি", "okay": "ঠিক আছে"
+    }
+    
+    words = text.lower().split()
+    translated_words = []
+    
+    for word in words:
+        # Clean punctuation
+        clean_word = word.strip('.,!?;:')
+        translated = word_map.get(clean_word, word)  # Fallback to original if not found
+        translated_words.append(translated)
+    
+    return " ".join(translated_words)
+
+def context_aware_translate(text):
+    """
+    Phase 2: Full context-aware translation (SAVED)
+    Uses the actual translator module
+    """
+    try:
+        return translate_to_bangla(text)
+    except Exception as e:
+        print(f"⚠️ Translation error: {e}")
+        return ""
 
 def split_into_sentences(text):
     """Split text into sentences"""
@@ -60,7 +106,7 @@ def meeting_loop():
     """Background thread for real-time transcription"""
     global audio_buffer
     
-    print("🎙️ Meeting loop started (GRADIO REAL-TIME)")
+    print("🎙️ Meeting loop started (2-PHASE TRANSLATION)")
     
     listener_thread = threading.Thread(target=start_listening(), daemon=True)
     listener_thread.start()
@@ -110,39 +156,74 @@ def meeting_loop():
                                     if current_segment["speaker"] is None:
                                         current_segment["speaker"] = speaker
                                         current_segment["text"] = text
-                                        current_segment["text_bn"] = ""
+                                        
+                                        # Phase 1: Instant word-by-word (NOT SAVED)
+                                        current_segment["text_bn_temp"] = word_by_word_translate(text)
+                                        current_segment["text_bn_final"] = ""
+                                        current_segment["is_translating"] = True
+                                        
+                                        # Phase 2: Background context-aware translation
+                                        def translate_contextual():
+                                            final_bn = context_aware_translate(text)
+                                            current_segment["text_bn_final"] = final_bn
+                                            current_segment["is_translating"] = False
+                                            print(f"✅ Translation complete: {final_bn[:50]}...")
+                                        
+                                        threading.Thread(target=translate_contextual, daemon=True).start()
                                         
                                     elif current_segment["speaker"] == speaker:
                                         # Same speaker - keep appending
                                         current_segment["text"] += " " + text
                                         
+                                        # Update Phase 1 (instant word-by-word)
+                                        current_segment["text_bn_temp"] = word_by_word_translate(current_segment["text"])
+                                        current_segment["is_translating"] = True
+                                        
+                                        # Update Phase 2 (background context-aware)
+                                        full_text = current_segment["text"]
+                                        def update_translation():
+                                            final_bn = context_aware_translate(full_text)
+                                            current_segment["text_bn_final"] = final_bn
+                                            current_segment["is_translating"] = False
+                                        
+                                        threading.Thread(target=update_translation, daemon=True).start()
+                                        
                                     else:
-                                        # Different speaker - save & start new
+                                        # Different speaker - save previous & start new
                                         if current_segment["text"]:
-                                            # Translate in background (non-blocking)
                                             prev_text = current_segment["text"]
                                             prev_speaker = current_segment["speaker"]
+                                            prev_bn = current_segment["text_bn_final"]
                                             
-                                            def translate_and_save():
-                                                try:
-                                                    text_bn = translate_to_bangla(prev_text)
-                                                    all_transcripts.append({
-                                                        "speaker": prev_speaker,
-                                                        "en": prev_text,
-                                                        "bn": text_bn if text_bn else "",
-                                                        "time": time.strftime("%H:%M:%S")
-                                                    })
-                                                    transcript_counter[0] += 1
-                                                except Exception as e:
-                                                    print(f"⚠️ Translation error: {e}")
+                                            # Wait a bit for final translation if still processing
+                                            if current_segment["is_translating"]:
+                                                time.sleep(0.5)  # Short wait for translation to complete
+                                                prev_bn = current_segment["text_bn_final"]
                                             
-                                            # Run translation async (don't wait)
-                                            threading.Thread(target=translate_and_save, daemon=True).start()
+                                            # Save ONLY the final context-aware translation
+                                            all_transcripts.append({
+                                                "speaker": prev_speaker,
+                                                "en": prev_text,
+                                                "bn": prev_bn if prev_bn else "[Translation pending]",
+                                                "time": time.strftime("%H:%M:%S")
+                                            })
+                                            transcript_counter[0] += 1
+                                            print(f"💾 Saved segment {transcript_counter[0]}")
                                         
-                                        # Immediately start new segment (no blocking)
+                                        # Start new segment
                                         current_segment["speaker"] = speaker
                                         current_segment["text"] = text
-                                        current_segment["text_bn"] = ""
+                                        current_segment["text_bn_temp"] = word_by_word_translate(text)
+                                        current_segment["text_bn_final"] = ""
+                                        current_segment["is_translating"] = True
+                                        
+                                        # Phase 2 for new segment
+                                        def translate_new():
+                                            final_bn = context_aware_translate(text)
+                                            current_segment["text_bn_final"] = final_bn
+                                            current_segment["is_translating"] = False
+                                        
+                                        threading.Thread(target=translate_new, daemon=True).start()
                                     
                             except Exception as e:
                                 print(f"❌ {e}")
@@ -162,9 +243,14 @@ def start_meeting():
     transcript_counter[0] = 0
     latest_english[0] = "🎧 Listening..."
     latest_bangla[0] = "🎧 শুনছি..."
-    current_segment = {"speaker": None, "text": "", "text_bn": ""}
+    current_segment = {
+        "speaker": None, 
+        "text": "", 
+        "text_bn_temp": "",
+        "text_bn_final": "",
+        "is_translating": False
+    }
     
-    # Reset speaker identification
     reset_speakers()
     
     if thread_instance[0] is None or not thread_instance[0].is_alive():
@@ -173,7 +259,7 @@ def start_meeting():
         thread_instance[0].start()
         
         return (
-            "✅ Meeting started! Streaming word-by-word transcription active...",
+            "✅ Meeting started! 2-Phase translation active (Word-by-word → Context-aware)...",
             "🎧 Listening... Waiting for speech...",
             "🎧 শুনছি... বক্তৃতার জন্য অপেক্ষা করছি...",
             "🟢 LIVE | Segments: 0"
@@ -183,13 +269,25 @@ def start_meeting():
 def stop_meeting():
     """Stop the meeting and generate summary"""
     running_flag.clear()
-    time.sleep(0.5)  # Give time to stop
+    
+    # Save current segment before stopping
+    if current_segment["text"]:
+        if current_segment["is_translating"]:
+            time.sleep(1)  # Wait for translation
+        
+        all_transcripts.append({
+            "speaker": current_segment["speaker"],
+            "en": current_segment["text"],
+            "bn": current_segment["text_bn_final"] if current_segment["text_bn_final"] else "[Translation pending]",
+            "time": time.strftime("%H:%M:%S")
+        })
+    
+    time.sleep(0.5)
     
     if len(all_transcripts) > 0:
         transcripts_en = [t["en"] for t in all_transcripts]
         summary = generate_summary(transcripts_en)
         
-        # Return summary + stop status
         return (
             summary,
             "⏹️ Meeting stopped",
@@ -203,7 +301,7 @@ def stop_meeting():
     )
 
 def get_current_captions():
-    """Get current live captions with streaming text"""
+    """Get current live captions with 2-phase translation"""
     count = transcript_counter[0]
     status = f"🟢 LIVE | Segments: {count}" if running_flag.is_set() else "⚪ Stopped"
     
@@ -213,19 +311,14 @@ def get_current_captions():
     # Build English output
     en_text = ""
     
-    # Show completed transcripts
     if len(recent) > 0:
-        for i, t in enumerate(recent):
+        for t in recent:
             speaker = t.get('speaker', 'Unknown')
             text_content = t.get('en', '')
             
-            # Extract speaker number safely
             try:
                 speaker_str = speaker.split()[0]
-                if 'Person-' in speaker_str:
-                    speaker_num = int(speaker_str.split('-')[1])
-                else:
-                    speaker_num = 0
+                speaker_num = int(speaker_str.split('-')[1]) if 'Person-' in speaker_str else 0
             except:
                 speaker_num = 0
             
@@ -241,36 +334,30 @@ def get_current_captions():
         
         try:
             speaker_str = speaker.split()[0] if speaker else "Unknown"
-            if 'Person-' in speaker_str:
-                speaker_num = int(speaker_str.split('-')[1])
-            else:
-                speaker_num = 0
+            speaker_num = int(speaker_str.split('-')[1]) if 'Person-' in speaker_str else 0
         except:
             speaker_num = 0
         
         is_right_aligned = (speaker_num % 2 == 0)
         indent = "                              " if is_right_aligned else ""
         
-        # Highlight as LIVE (incomplete) with streaming indicator
         en_text += f"{indent}🔴 {speaker}: {text_content}\n\n"
     
     if not en_text:
         en_text = "🎧 Listening... Waiting for speech..."
     
-    # Build Bangla output (same logic)
+    # Build Bangla output with 2-PHASE TRANSLATION
     bn_text = ""
     
+    # Show completed segments (with FINAL translation only)
     if len(recent) > 0:
-        for i, t in enumerate(recent):
+        for t in recent:
             speaker = t.get('speaker', 'Unknown')
             bn = t.get('bn', '') if t.get('bn', '') else "[অনুবাদ মুলতুবি...]"
             
             try:
                 speaker_str = speaker.split()[0]
-                if 'Person-' in speaker_str:
-                    speaker_num = int(speaker_str.split('-')[1])
-                else:
-                    speaker_num = 0
+                speaker_num = int(speaker_str.split('-')[1]) if 'Person-' in speaker_str else 0
             except:
                 speaker_num = 0
             
@@ -279,27 +366,30 @@ def get_current_captions():
             
             bn_text += f"{indent}{speaker}: {bn}\n\n"
     
-    # Add current incomplete segment (NO TRANSLATION for live - faster!)
+    # Show current segment with PHASE 1 → PHASE 2 transition
     if current_segment["text"]:
         speaker = current_segment["speaker"]
         
-        # Skip live translation to reduce latency
-        bn = "[সরাসরি চলছে... অনুবাদ পরে]"
-        bn = current_segment.get("text_bn", "") if current_segment.get("text_bn", "") else "[অনুবাদ হচ্ছে...]"
-        
         try:
             speaker_str = speaker.split()[0] if speaker else "Unknown"
-            if 'Person-' in speaker_str:
-                speaker_num = int(speaker_str.split('-')[1])
-            else:
-                speaker_num = 0
+            speaker_num = int(speaker_str.split('-')[1]) if 'Person-' in speaker_str else 0
         except:
             speaker_num = 0
         
         is_right_aligned = (speaker_num % 2 == 0)
         indent = "                              " if is_right_aligned else ""
         
-        bn_text += f"{indent}🔴 {speaker}: {bn}\n\n"
+        # SIMPLIFIED: Show ONLY icon + translation (Phase 2 replaces Phase 1)
+        if current_segment["text_bn_final"]:
+            # Phase 2 ready - show final translation with checkmark
+            bn = current_segment["text_bn_final"]
+            icon = "✅"
+        else:
+            # Phase 1 - show word-by-word with lightning
+            bn = current_segment["text_bn_temp"] if current_segment["text_bn_temp"] else "[অনুবাদ হচ্ছে...]"
+            icon = "⚡"
+        
+        bn_text += f"{indent}🔴 {speaker}: {icon}{bn}\n\n"
     
     if not bn_text:
         bn_text = "🎧 শুনছি... বক্তৃতার জন্য অপেক্ষা করছি..."
@@ -307,7 +397,7 @@ def get_current_captions():
     return en_text, bn_text, status
 
 def get_transcript_history():
-    """Get full transcript history with speaker labels"""
+    """Get full transcript history (ONLY FINAL translations)"""
     if len(all_transcripts) == 0:
         return "📭 No transcripts yet. Start speaking!"
     
@@ -318,20 +408,20 @@ def get_transcript_history():
         history += f"### [{t['time']}] {speaker}\n\n"
         history += f"**🇬🇧 English:**  \n{t['en']}\n\n"
         if t['bn']:
-            history += f"**🇧🇩 বাংলা:**  \n{t['bn']}\n\n"
+            history += f"**🇧🇩 বাংলা (Context-aware):**  \n{t['bn']}\n\n"
         history += "---\n\n"
     
     return history
 
 # Gradio Interface
 with gr.Blocks(
-    title="MeetingAI - Real-time Transcription", 
+    title="MeetingAI - 2-Phase Translation", 
     theme=gr.themes.Soft(primary_hue="blue", secondary_hue="orange")
 ) as demo:
     
     gr.Markdown("""
-    # 🧑‍💼 MeetingAI - Zero Latency Transcription ⚡
-    **GPU Accelerated | English + বাংলা Translation**
+    # 🧑‍💼 MeetingAI - 2-Phase Translation System ⚡
+    **Phase 1:** Word-by-word (instant) → **Phase 2:** Context-aware (accurate)
     """)
     
     with gr.Row():
@@ -344,7 +434,11 @@ with gr.Blocks(
     
     status_text = gr.Textbox(label="System Message", interactive=False, visible=False)
     
-    gr.Markdown("## 💬 Live Captions (Real-time)")
+    gr.Markdown("""
+    ## 💬 Live Captions (2-Phase Translation)
+    **⚡ Phase 1:** Word-by-word translation (instant feedback)  
+    **✅ Phase 2:** Context-aware translation (replaces Phase 1 when ready)
+    """)
     
     with gr.Row():
         with gr.Column():
@@ -354,34 +448,34 @@ with gr.Blocks(
                 value="Click 'Start Meeting' to begin...",
                 interactive=False,
                 show_copy_button=True,
-                autoscroll=True,  # Auto-scroll to bottom
+                autoscroll=True,
                 max_lines=15
             )
         
         with gr.Column():
             bangla_output = gr.Textbox(
-                label="🇧🇩 বাংলা (শেষ ১০টি সেগমেন্ট)", 
+                label="🇧🇩 বাংলা (2-Phase: Word→Context)", 
                 lines=12,
                 value="'Start Meeting' ক্লিক করুন...",
                 interactive=False,
                 show_copy_button=True,
-                autoscroll=True,  # Auto-scroll to bottom
+                autoscroll=True,
                 max_lines=15
             )
     
-    with gr.Accordion("📜 Transcript History", open=False):
+    with gr.Accordion("📜 Transcript History (Final Translations Only)", open=False):
         transcript_display = gr.Markdown("Click 'Start Meeting' to begin")
     
     with gr.Accordion("📝 Meeting Summary", open=False):
         summary_output = gr.Markdown("Stop the meeting to generate summary")
     
     # Event handlers
-    start_event = start_btn.click(
+    start_btn.click(
         fn=start_meeting,
         outputs=[status_text, english_output, bangla_output, status_display]
     )
     
-    stop_event = stop_btn.click(
+    stop_btn.click(
         fn=stop_meeting,
         outputs=[summary_output, status_text, status_display]
     )
@@ -393,7 +487,7 @@ with gr.Blocks(
         show_progress=False
     )
     
-    # Refresh captions every 200ms (EXTREME SPEED!)
+    # Refresh captions every 200ms
     caption_refresh = gr.Timer(0.2)
     caption_refresh.tick(
         fn=get_current_captions,
@@ -409,9 +503,10 @@ with gr.Blocks(
 
 if __name__ == "__main__":
     print("\n" + "="*60)
-    print("🚀 Starting MeetingAI with Gradio")
+    print("🚀 Starting MeetingAI with 2-Phase Translation")
     print("="*60)
-    print("📊 GPU accelerated transcription")
+    print("⚡ Phase 1: Word-by-word (instant)")
+    print("✅ Phase 2: Context-aware (accurate + saved)")
     print("🌐 Access at: http://localhost:7860")
     print("="*60 + "\n")
     
