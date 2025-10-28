@@ -4,11 +4,29 @@ import time
 import numpy as np
 import queue
 import json
-from src.transcriber import transcribe
-from src.translator import translate_to_bangla
-from src.summarizer import generate_summary
-from src.audio_listener import start_listening, combined_queue
-from src.speaker_identifier import identify_speaker, reset_speakers
+import sys
+import os
+
+# Add src to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+try:
+    from transcriber import transcribe
+    from translator import translate_to_bangla
+    from summarizer import generate_summary
+    from audio_listener import start_listening, combined_queue
+    from speaker_identifier import identify_speaker, reset_speakers
+    print("✅ All modules imported successfully")
+except ImportError as e:
+    print(f"❌ Import error: {e}")
+    print("⚠️ Running without speaker identification")
+    
+    # Fallback: no speaker identification
+    def identify_speaker(audio, samplerate=16000):
+        return "Person-1"
+    
+    def reset_speakers():
+        pass
 
 # Global state
 running_flag = threading.Event()
@@ -20,6 +38,7 @@ latest_english = ["Waiting for speech..."]
 latest_bangla = ["বক্তৃতার জন্য অপেক্ষা করছি..."]
 all_transcripts = []
 transcript_counter = [0]
+current_segment = {"speaker": None, "text": "", "text_bn": ""}  # Accumulating current segment
 
 def split_into_sentences(text):
     """Split text into sentences"""
@@ -78,33 +97,55 @@ def meeting_loop():
                         
                         def process_audio(audio):
                             try:
+                                # Identify speaker (fast, cached)
+                                speaker = identify_speaker(audio, samplerate=16000)
+                                
+                                # Transcribe (GPU accelerated)
                                 text = transcribe(audio)
+                                
                                 if text and len(text.strip()) > 2:
-                                    print(f"✅ EN: {text}")
+                                    print(f"⚡ [{speaker}] {text}")
                                     
-                                    # Translate
-                                    text_bn = translate_to_bangla(text)
-                                    if text_bn:
-                                        print(f"🇧🇩 BN: {text_bn}")
-                                    
-                                    # Update shared state
-                                    latest_english[0] = text
-                                    latest_bangla[0] = text_bn if text_bn else "Translation unavailable"
-                                    
-                                    # Add to history
-                                    all_transcripts.append({
-                                        "en": text,
-                                        "bn": text_bn if text_bn else "",
-                                        "time": time.strftime("%H:%M:%S")
-                                    })
-                                    
-                                    transcript_counter[0] += 1
-                                    print(f"📊 Total transcripts: {transcript_counter[0]}")
+                                    # Check if same speaker or new speaker
+                                    if current_segment["speaker"] is None:
+                                        current_segment["speaker"] = speaker
+                                        current_segment["text"] = text
+                                        current_segment["text_bn"] = ""
+                                        
+                                    elif current_segment["speaker"] == speaker:
+                                        # Same speaker - keep appending
+                                        current_segment["text"] += " " + text
+                                        
+                                    else:
+                                        # Different speaker - save & start new
+                                        if current_segment["text"]:
+                                            # Translate in background (non-blocking)
+                                            prev_text = current_segment["text"]
+                                            prev_speaker = current_segment["speaker"]
+                                            
+                                            def translate_and_save():
+                                                try:
+                                                    text_bn = translate_to_bangla(prev_text)
+                                                    all_transcripts.append({
+                                                        "speaker": prev_speaker,
+                                                        "en": prev_text,
+                                                        "bn": text_bn if text_bn else "",
+                                                        "time": time.strftime("%H:%M:%S")
+                                                    })
+                                                    transcript_counter[0] += 1
+                                                except Exception as e:
+                                                    print(f"⚠️ Translation error: {e}")
+                                            
+                                            # Run translation async (don't wait)
+                                            threading.Thread(target=translate_and_save, daemon=True).start()
+                                        
+                                        # Immediately start new segment (no blocking)
+                                        current_segment["speaker"] = speaker
+                                        current_segment["text"] = text
+                                        current_segment["text_bn"] = ""
                                     
                             except Exception as e:
-                                print(f"❌ Error: {e}")
-                                import traceback
-                                traceback.print_exc()
+                                print(f"❌ {e}")
                         
                         threading.Thread(target=process_audio, args=(combined_audio,), daemon=True).start()
             
@@ -116,20 +157,23 @@ def meeting_loop():
 
 def start_meeting():
     """Start the meeting transcription"""
-    global all_transcripts
+    global all_transcripts, current_segment
     all_transcripts = []
     transcript_counter[0] = 0
     latest_english[0] = "🎧 Listening..."
     latest_bangla[0] = "🎧 শুনছি..."
+    current_segment = {"speaker": None, "text": "", "text_bn": ""}
+    
+    # Reset speaker identification
+    reset_speakers()
     
     if thread_instance[0] is None or not thread_instance[0].is_alive():
         running_flag.set()
         thread_instance[0] = threading.Thread(target=meeting_loop, daemon=True)
         thread_instance[0].start()
         
-        # Return empty captions to show "Listening"
         return (
-            "✅ Meeting started! GPU-accelerated real-time transcription active...",
+            "✅ Meeting started! Streaming word-by-word transcription active...",
             "🎧 Listening... Waiting for speech...",
             "🎧 শুনছি... বক্তৃতার জন্য অপেক্ষা করছি...",
             "🟢 LIVE | Segments: 0"
@@ -139,59 +183,151 @@ def start_meeting():
 def stop_meeting():
     """Stop the meeting and generate summary"""
     running_flag.clear()
+    time.sleep(0.5)  # Give time to stop
     
     if len(all_transcripts) > 0:
         transcripts_en = [t["en"] for t in all_transcripts]
         summary = generate_summary(transcripts_en)
-        return summary
-    return "No transcripts to summarize"
+        
+        # Return summary + stop status
+        return (
+            summary,
+            "⏹️ Meeting stopped",
+            "⚪ STOPPED | Meeting ended"
+        )
+    
+    return (
+        "No transcripts to summarize",
+        "⏹️ Meeting stopped (no transcripts)",
+        "⚪ STOPPED"
+    )
 
 def get_current_captions():
-    """Get current live captions with last 10 segments"""
+    """Get current live captions with streaming text"""
     count = transcript_counter[0]
     status = f"🟢 LIVE | Segments: {count}" if running_flag.is_set() else "⚪ Stopped"
     
-    # Get last 10 transcripts
+    # Get last 10 completed transcripts
     recent = all_transcripts[-10:] if len(all_transcripts) > 0 else []
     
-    # Build English output with last 10
+    # Build English output
     en_text = ""
-    if len(recent) == 0:
-        en_text = "🎧 Listening... Waiting for speech..."
-    else:
-        for i, t in enumerate(recent):
-            segment_num = len(all_transcripts) - len(recent) + i + 1
-            # Highlight latest (last one)
-            if i == len(recent) - 1:
-                en_text += f"🔴 #{segment_num} (LIVE): {t['en']}\n\n"
-            else:
-                en_text += f"#{segment_num}: {t['en']}\n\n"
     
-    # Build Bangla output with last 10
-    bn_text = ""
-    if len(recent) == 0:
-        bn_text = "🎧 শুনছি... বক্তৃতার জন্য অপেক্ষা করছি..."
-    else:
+    # Show completed transcripts
+    if len(recent) > 0:
         for i, t in enumerate(recent):
-            segment_num = len(all_transcripts) - len(recent) + i + 1
-            bn = t['bn'] if t['bn'] else "[Translation pending...]"
-            # Highlight latest (last one)
-            if i == len(recent) - 1:
-                bn_text += f"🔴 #{segment_num} (সরাসরি): {bn}\n\n"
+            speaker = t.get('speaker', 'Unknown')
+            text_content = t.get('en', '')
+            
+            # Extract speaker number safely
+            try:
+                speaker_str = speaker.split()[0]
+                if 'Person-' in speaker_str:
+                    speaker_num = int(speaker_str.split('-')[1])
+                else:
+                    speaker_num = 0
+            except:
+                speaker_num = 0
+            
+            is_right_aligned = (speaker_num % 2 == 0)
+            indent = "                              " if is_right_aligned else ""
+            
+            en_text += f"{indent}{speaker}: {text_content}\n\n"
+    
+    # Add current incomplete segment (streaming)
+    if current_segment["text"]:
+        speaker = current_segment["speaker"]
+        text_content = current_segment["text"]
+        
+        try:
+            speaker_str = speaker.split()[0] if speaker else "Unknown"
+            if 'Person-' in speaker_str:
+                speaker_num = int(speaker_str.split('-')[1])
             else:
-                bn_text += f"#{segment_num}: {bn}\n\n"
+                speaker_num = 0
+        except:
+            speaker_num = 0
+        
+        is_right_aligned = (speaker_num % 2 == 0)
+        indent = "                              " if is_right_aligned else ""
+        
+        # Highlight as LIVE (incomplete) with streaming indicator
+        en_text += f"{indent}🔴 {speaker}: {text_content}\n\n"
+    
+    if not en_text:
+        en_text = "🎧 Listening... Waiting for speech..."
+    
+    # Build Bangla output (same logic)
+    bn_text = ""
+    
+    if len(recent) > 0:
+        for i, t in enumerate(recent):
+            speaker = t.get('speaker', 'Unknown')
+            bn = t.get('bn', '') if t.get('bn', '') else "[অনুবাদ মুলতুবি...]"
+            
+            try:
+                speaker_str = speaker.split()[0]
+                if 'Person-' in speaker_str:
+                    speaker_num = int(speaker_str.split('-')[1])
+                else:
+                    speaker_num = 0
+            except:
+                speaker_num = 0
+            
+            is_right_aligned = (speaker_num % 2 == 0)
+            indent = "                              " if is_right_aligned else ""
+            
+            bn_text += f"{indent}{speaker}: {bn}\n\n"
+    
+    # Add current incomplete segment (translate on-the-fly but cached)
+    if current_segment["text"]:
+        speaker = current_segment["speaker"]
+        
+        # Only translate if text changed significantly (reduce API calls)
+        current_length = len(current_segment["text"])
+        translated_length = len(current_segment.get("text_bn", "")) * 3  # Rough estimate
+        
+        if current_length > translated_length + 50:  # More than 50 chars added
+            # Need fresh translation (but don't block - use thread)
+            def update_translation():
+                try:
+                    current_segment["text_bn"] = translate_to_bangla(current_segment["text"])
+                except:
+                    pass
+            
+            threading.Thread(target=update_translation, daemon=True).start()
+        
+        bn = current_segment.get("text_bn", "") if current_segment.get("text_bn", "") else "[অনুবাদ হচ্ছে...]"
+        
+        try:
+            speaker_str = speaker.split()[0] if speaker else "Unknown"
+            if 'Person-' in speaker_str:
+                speaker_num = int(speaker_str.split('-')[1])
+            else:
+                speaker_num = 0
+        except:
+            speaker_num = 0
+        
+        is_right_aligned = (speaker_num % 2 == 0)
+        indent = "                              " if is_right_aligned else ""
+        
+        bn_text += f"{indent}🔴 {speaker}: {bn}\n\n"
+    
+    if not bn_text:
+        bn_text = "🎧 শুনছি... বক্তৃতার জন্য অপেক্ষা করছি..."
     
     return en_text, bn_text, status
 
 def get_transcript_history():
-    """Get full transcript history"""
+    """Get full transcript history with speaker labels"""
     if len(all_transcripts) == 0:
         return "📭 No transcripts yet. Start speaking!"
     
     history = f"## 📜 Full Transcript ({len(all_transcripts)} segments)\n\n"
     for i, t in enumerate(reversed(all_transcripts[-15:]), 1):
         idx = len(all_transcripts) - i + 1
-        history += f"### Segment #{idx} • {t['time']}\n\n"
+        speaker = t.get('speaker', 'Unknown')
+        history += f"### [{t['time']}] {speaker}\n\n"
         history += f"**🇬🇧 English:**  \n{t['en']}\n\n"
         if t['bn']:
             history += f"**🇧🇩 বাংলা:**  \n{t['bn']}\n\n"
@@ -259,7 +395,7 @@ with gr.Blocks(
     
     stop_event = stop_btn.click(
         fn=stop_meeting,
-        outputs=summary_output
+        outputs=[summary_output, status_text, status_display]
     )
     
     # Continuous polling for live updates
@@ -269,8 +405,8 @@ with gr.Blocks(
         show_progress=False
     )
     
-    # Refresh captions every 500ms
-    caption_refresh = gr.Timer(0.5)
+    # Refresh captions every 300ms (ULTRA FAST!)
+    caption_refresh = gr.Timer(0.3)
     caption_refresh.tick(
         fn=get_current_captions,
         outputs=[english_output, bangla_output, status_display]

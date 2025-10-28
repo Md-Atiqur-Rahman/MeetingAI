@@ -36,8 +36,8 @@ def find_loopback_device():
     print("⚠️ No loopback device found. Using default input.")
     return None
 
-def start_listening(samplerate=16000, blocksize=800):  # Smaller blocks = lower latency
-    """Captures system audio with low latency"""
+def start_listening(samplerate=16000, blocksize=400):  # ULTRA LOW LATENCY (was 800)
+    """Captures system audio with ultra-low latency"""
     
     def record_loop():
         """Main recording loop with optimized settings"""
