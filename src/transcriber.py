@@ -8,31 +8,34 @@ print("📥 Loading faster-whisper model...")
 print(f"🎮 CUDA available: {torch.cuda.is_available()}")
 
 # Auto-detect best device
-
-# Try GPU first
-if torch.cuda.is_available():
-    print(f"🎮 Attempting GPU: {torch.cuda.get_device_name(0)}")
-    model = WhisperModel(
-        "tiny",
-        device="cuda",
-        compute_type="float16",
-        device_index=0,
-        num_workers=4
-    )
-    print("✅ Faster-whisper loaded on GPU")
-else:
-    raise Exception("CUDA not available")
+try:
+    # Try GPU first
+    if torch.cuda.is_available():
+        print(f"🎮 Attempting GPU: {torch.cuda.get_device_name(0)}")
+        model = WhisperModel(
+            "tiny",  # CHANGED: tiny for ultra-low latency (was "base")
+            device="cuda",
+            compute_type="float16",
+            device_index=0,
+            num_workers=2  # Reduced for lower latency
+        )
+        print("✅ Faster-whisper TINY model loaded on GPU (ULTRA FAST MODE)")
+    else:
+        raise Exception("CUDA not available")
         
-
-# # Fallback to CPU with optimization
-# model = WhisperModel(
-#     "tiny",# "tiny" = fastest, "small" = balanced, "base" = good quality
-#     device="cpu",
-#     compute_type="int8",  # CPU optimized
-#     cpu_threads=4,  # Use 4 threads
-#     num_workers=4
-# )
-# print("✅ Faster-whisper loaded on CPU (optimized)")
+except Exception as e:
+    print(f"⚠️ GPU load failed: {e}")
+    print("📥 Loading TINY model on CPU...")
+    
+    # Fallback to CPU with tiny model
+    model = WhisperModel(
+        "tiny",  # Tiny model for speed
+        device="cpu",
+        compute_type="int8",
+        cpu_threads=2,
+        num_workers=2
+    )
+    print("✅ Faster-whisper TINY model loaded on CPU (FAST MODE)")
 
 def transcribe(audio_np):
     """

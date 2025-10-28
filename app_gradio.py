@@ -279,24 +279,12 @@ def get_current_captions():
             
             bn_text += f"{indent}{speaker}: {bn}\n\n"
     
-    # Add current incomplete segment (translate on-the-fly but cached)
+    # Add current incomplete segment (NO TRANSLATION for live - faster!)
     if current_segment["text"]:
         speaker = current_segment["speaker"]
         
-        # Only translate if text changed significantly (reduce API calls)
-        current_length = len(current_segment["text"])
-        translated_length = len(current_segment.get("text_bn", "")) * 3  # Rough estimate
-        
-        if current_length > translated_length + 50:  # More than 50 chars added
-            # Need fresh translation (but don't block - use thread)
-            def update_translation():
-                try:
-                    current_segment["text_bn"] = translate_to_bangla(current_segment["text"])
-                except:
-                    pass
-            
-            threading.Thread(target=update_translation, daemon=True).start()
-        
+        # Skip live translation to reduce latency
+        bn = "[সরাসরি চলছে... অনুবাদ পরে]"
         bn = current_segment.get("text_bn", "") if current_segment.get("text_bn", "") else "[অনুবাদ হচ্ছে...]"
         
         try:
@@ -405,8 +393,8 @@ with gr.Blocks(
         show_progress=False
     )
     
-    # Refresh captions every 300ms (ULTRA FAST!)
-    caption_refresh = gr.Timer(0.3)
+    # Refresh captions every 200ms (EXTREME SPEED!)
+    caption_refresh = gr.Timer(0.2)
     caption_refresh.tick(
         fn=get_current_captions,
         outputs=[english_output, bangla_output, status_display]
