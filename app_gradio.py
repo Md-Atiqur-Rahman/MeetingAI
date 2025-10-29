@@ -6,6 +6,7 @@ import queue
 import json
 import sys
 import os
+from dotenv import load_dotenv
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -16,16 +17,74 @@ try:
     from summarizer import generate_summary
     from audio_listener import start_listening, combined_queue
     from speaker_identifier import identify_speaker, reset_speakers
+    from ai_summarizer import generate_ai_summary  # NEW: Gemini-only AI summarizer
     print("✅ All modules imported successfully")
 except ImportError as e:
     print(f"❌ Import error: {e}")
-    print("⚠️ Running without speaker identification")
+    print("⚠️ Running with limited functionality")
     
     def identify_speaker(audio, samplerate=16000):
         return "Person-1"
     
     def reset_speakers():
         pass
+    
+    def generate_ai_summary(transcripts):
+        return "❌ AI Summarizer module not found. Check ai_summarizer.py"
+
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
+# Try to configure AI models (OpenAI or Gemini)
+AI_MODEL = None
+AI_TYPE = None
+
+# Try OpenAI first
+try:
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    if OPENAI_API_KEY:
+        import openai
+        openai.api_key = OPENAI_API_KEY
+        AI_MODEL = "gpt-3.5-turbo"  # or "gpt-4" for better quality
+        AI_TYPE = "openai"
+        print(f"✅ Using OpenAI: {AI_MODEL}")
+except Exception as e:
+    print(f"⚠️ OpenAI not available: {e}")
+
+# Fallback to Gemini if OpenAI not available
+if not AI_MODEL:
+    try:
+        GENAI_API_KEY = os.getenv("GENAI_API_KEY")
+        if GENAI_API_KEY:
+            import google.generativeai as genai
+            genai.configure(api_key=GENAI_API_KEY)
+            
+            # Latest Gemini models (2024-2025)
+            model_names = [
+                "models/gemini-2.5-flash",           # Latest, fastest
+                "models/gemini-2.0-flash",           # Stable, fast
+                "models/gemini-flash-latest",        # Auto-updated
+                "models/gemini-pro-latest",          # High quality
+                "models/gemini-2.5-pro",             # Most powerful
+            ]
+            
+            for model_name in model_names:
+                try:
+                    AI_MODEL = genai.GenerativeModel(model_name)
+                    # Quick test
+                    test_response = AI_MODEL.generate_content("Hi")
+                    AI_TYPE = "gemini"
+                    print(f"✅ Using Gemini: {model_name}")
+                    break
+                except Exception as e:
+                    print(f"⚠️ {model_name} not available: {str(e)[:50]}")
+                    continue
+    except Exception as e:
+        print(f"⚠️ Gemini initialization failed: {e}")
+
+if not AI_MODEL:
+    print("⚠️ No AI model configured. Add OPENAI_API_KEY or GENAI_API_KEY to .env file")
 
 # Global state
 running_flag = threading.Event()
@@ -267,7 +326,7 @@ def start_meeting():
     return "⚠️ Already running", "", "", ""
 
 def stop_meeting():
-    """Stop the meeting and generate summary"""
+    """Stop the meeting"""
     running_flag.clear()
     
     # Save current segment before stopping
@@ -284,21 +343,85 @@ def stop_meeting():
     
     time.sleep(0.5)
     
-    if len(all_transcripts) > 0:
-        transcripts_en = [t["en"] for t in all_transcripts]
-        summary = generate_summary(transcripts_en)
-        
-        return (
-            summary,
-            "⏹️ Meeting stopped",
-            "⚪ STOPPED | Meeting ended"
-        )
+    # Return message for status
+    return "⏹️ Meeting stopped. Click 'Show Summary' to view transcript."
+
+def show_basic_summary():
+    """Generate basic summary without AI"""
+    if len(all_transcripts) == 0:
+        return "📭 No transcripts yet. Start the meeting first!"
     
-    return (
-        "No transcripts to summarize",
-        "⏹️ Meeting stopped (no transcripts)",
-        "⚪ STOPPED"
-    )
+    # Statistics
+    total_segments = len(all_transcripts)
+    total_words_en = sum(len(t["en"].split()) for t in all_transcripts)
+    total_words_bn = sum(len(t["bn"].split()) for t in all_transcripts)
+    
+    # Build summary
+    summary = f"""## 📊 Meeting Summary
+
+**📈 Statistics:**
+- Total Segments: {total_segments}
+- Total Words (English): {total_words_en}
+- Total Words (বাংলা): {total_words_bn}
+- Estimated Duration: ~{total_segments * 5} seconds
+
+---
+
+## 📝 Full Transcript:
+
+"""
+    
+    # Add all segments with speaker labels
+    for i, t in enumerate(all_transcripts, 1):
+        summary += f"### {i}. [{t['time']}] {t.get('speaker', 'Unknown')}\n\n"
+        summary += f"**🇬🇧 EN:** {t['en']}\n\n"
+        if t['bn']:
+            summary += f"**🇧🇩 BN:** {t['bn']}\n\n"
+        summary += "---\n\n"
+    
+    summary += "\n💡 **Click 'Generate AI Summary' for intelligent insights and suggestions!**"
+    
+    return summary
+
+def generate_ai_summary_ui():
+    """
+    Generate AI-powered summary using separate ai_summarizer.py module
+    Uses ONLY Gemini (100% FREE) - No OpenAI
+    """
+    if len(all_transcripts) == 0:
+        return "📭 No transcripts available for AI summary."
+    
+    try:
+        # Call the separate ai_summarizer module (Gemini only)
+        summary = generate_ai_summary(all_transcripts)
+        return summary
+    except Exception as e:
+        return f"""❌ AI Summary Error
+
+**Error:** {str(e)}
+
+**Troubleshooting:**
+
+1. **Check ai_summarizer.py file:**
+   - File must be in same directory as app_gradio.py
+   - File name: `ai_summarizer.py`
+
+2. **Check GENAI_API_KEY:**
+   - Get free key: https://makersuite.google.com/app/apikey
+   - Add to .env: `GENAI_API_KEY=AIzaSy...`
+
+3. **Install Gemini library:**
+   ```bash
+   pip install google-generativeai
+   ```
+
+4. **Test ai_summarizer separately:**
+   ```bash
+   python ai_summarizer.py
+   ```
+
+**Fallback:** Use 'Show Summary' button for basic transcript view.
+"""
 
 def get_current_captions():
     """Get current live captions with 2-phase translation"""
@@ -429,7 +552,11 @@ with gr.Blocks(
             start_btn = gr.Button("▶️ Start Meeting", variant="primary", size="lg")
         with gr.Column(scale=2):
             stop_btn = gr.Button("⏹️ Stop Meeting", variant="stop", size="lg")
-        with gr.Column(scale=3):
+        with gr.Column(scale=2):
+            summary_btn = gr.Button("📊 Show Summary", variant="secondary", size="lg")
+        with gr.Column(scale=2):
+            ai_summary_btn = gr.Button("🤖 Generate AI Summary", variant="primary", size="lg")
+        with gr.Column(scale=2):
             status_display = gr.Textbox(label="Status", interactive=False, value="⚪ Ready")
     
     status_text = gr.Textbox(label="System Message", interactive=False, visible=False)
@@ -466,8 +593,11 @@ with gr.Blocks(
     with gr.Accordion("📜 Transcript History (Final Translations Only)", open=False):
         transcript_display = gr.Markdown("Click 'Start Meeting' to begin")
     
-    with gr.Accordion("📝 Meeting Summary", open=False):
-        summary_output = gr.Markdown("Stop the meeting to generate summary")
+    with gr.Accordion("📝 Basic Summary (Transcript View)", open=False):
+        summary_output = gr.Markdown("Click 'Show Summary' to view transcript")
+    
+    with gr.Accordion("🤖 AI Summary (Intelligent Analysis)", open=False):
+        ai_summary_output = gr.Markdown("Click 'Generate AI Summary' for AI-powered insights")
     
     # Event handlers
     start_btn.click(
@@ -477,7 +607,17 @@ with gr.Blocks(
     
     stop_btn.click(
         fn=stop_meeting,
-        outputs=[summary_output, status_text, status_display]
+        outputs=status_text
+    )
+    
+    summary_btn.click(
+        fn=show_basic_summary,
+        outputs=summary_output
+    )
+    
+    ai_summary_btn.click(
+        fn=generate_ai_summary_ui,
+        outputs=ai_summary_output
     )
     
     # Continuous polling for live updates
