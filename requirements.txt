@@ -1,8 +1,34 @@
-streamlit
-openai-whisper
-sounddevice
-numpy
-torch
-google-generativeai
-soundcard numpy
-pywin32
+# MeetingAI Requirements
+# Updated: 2024-10-30
+
+# Core dependencies
+openai-whisper>=20231117
+gradio>=4.0.0
+google-generativeai>=0.3.0
+python-dotenv>=1.0.0
+numpy>=1.24.0
+
+# Audio processing
+sounddevice>=0.4.6
+pyaudio>=0.2.13
+scipy>=1.11.0
+
+# Speaker identification
+speechbrain>=0.5.16
+
+# Translation
+deep-translator>=1.11.4
+
+# NEW: AI Conversation Practice (Week 1)
+gTTS>=2.4.0              # Google Text-to-Speech (AI voice)
+pygame>=2.5.2            # Audio playback
+pydub>=0.25.1            # Audio processing (optional)
+
+# Future: Week 2-5 (comment out for now)
+# textblob>=0.17.1          # Sentiment analysis
+# phonemizer>=3.2.1         # Pronunciation checking
+# language-tool-python>=2.7.1  # Grammar checking
+
+# System dependencies (install separately)
+# - ffmpeg (for audio processing)
+# - espeak (for phonemizer - install later)
